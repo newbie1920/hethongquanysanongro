@@ -156,6 +156,29 @@ export const Admin = () => {
     }
   };
 
+  const handleEditPrice = async (court: Court) => {
+    const val = window.prompt(`Nhập giá cho ${court.name}\nĐịnh dạng: SÁNG, CHIỀU, TỐI (cách nhau bởi dấu phẩy)\nVD: 100000, 80000, 150000`, 
+                 `${court.price_morning||100000}, ${court.price_afternoon||80000}, ${court.price_evening||150000}`);
+    if (!val) return;
+    const parts = val.split(',').map(s=>parseInt(s.trim()));
+    if(parts.length===3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+       try {
+         const { error } = await supabase.from('courts').update({
+            price_morning: parts[0],
+            price_afternoon: parts[1],
+            price_evening: parts[2]
+         }).eq('id', court.id);
+         if(error) throw error;
+         toast.success("Cập nhật giá thành công!");
+         fetchCourts();
+       } catch (e) {
+         toast.error("Lỗi: Hãy chắc chắn CSDL Supabase đã được thêm các cột giá!");
+       }
+    } else {
+       toast.error("Định dạng không hợp lệ!");
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -195,6 +218,7 @@ export const Admin = () => {
                 <TableRow>
                   <TableHead>ID</TableHead>
                   <TableHead>Tên</TableHead>
+                  <TableHead>Giá (Sáng/Chiều/Tối)</TableHead>
                   <TableHead>Trạng thái</TableHead>
                   <TableHead className="text-right">Thao tác</TableHead>
                 </TableRow>
@@ -204,13 +228,16 @@ export const Admin = () => {
                   <TableRow key={court.id}>
                     <TableCell className="font-medium">{court.id.slice(0, 8)}</TableCell>
                     <TableCell>{court.name}</TableCell>
+                    <TableCell className="text-xs text-slate-500 font-mono">
+                      {((court.price_morning||100000)/1000).toFixed(0)}k / {((court.price_afternoon||80000)/1000).toFixed(0)}k / {((court.price_evening||150000)/1000).toFixed(0)}k
+                    </TableCell>
                     <TableCell>
                       <Badge variant={court.status === 'available' ? 'default' : 'secondary'}>
                         {court.status === 'available' ? 'Trống' : court.status === 'in_use' ? 'Đang sử dụng' : 'Bảo trì'}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button variant="outline" size="sm">Sửa</Button>
+                      <Button variant="outline" size="sm" onClick={() => handleEditPrice(court)}>Sửa giá</Button>
                     </TableCell>
                   </TableRow>
                 ))}

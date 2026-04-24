@@ -1,29 +1,37 @@
+#include <ESP32Servo.h>
+#include <PubSubClient.h>
+#include <TFT_eSPI.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
-#include <PubSubClient.h>
-#include <ESP32Servo.h>
-#include <TFT_eSPI.h>
 #include <qrcode.h>
 
 // ============ CẤU HÌNH CHÂN ============
-#define RELAY_LIGHT_PIN  25
-#define RELAY_FAN_PIN    26
-#define SERVO_PIN        12
+#define RELAY_LIGHT_PIN 25
+#define RELAY_FAN_PIN 26
+#define SERVO_PIN_1 12
+#define SERVO_PIN_2 15
+#define PIR_PIN_1 13
+#define BUZZER_PIN_1 27
+#define PIR_PIN_2 14
+#define BUZZER_PIN_2 32
 
 // ============ MQTT ============
-const char* mqtt_server = "broker.emqx.io";
-const int   mqtt_port   = 1883;
+const char *mqtt_server = "broker.emqx.io";
+const int mqtt_port = 1883;
 
 // ============ HARDWARE ============
 TFT_eSPI tft = TFT_eSPI();
-Servo doorServo;
+Servo doorServo1;
+Servo doorServo2;
 WiFiClient espClient;
 PubSubClient mqtt(espClient);
 
 // ============ TRẠNG THÁI ============
 String currentQRToken = "";
 bool lightOn = false;
-bool fanOn   = false;
+bool fanOn = false;
+bool isCourt1Booked = false;
+bool isCourt2Booked = false;
 
 // ============ TẠO MÃ TOKEN ============
 String generateToken() {
@@ -32,14 +40,15 @@ String generateToken() {
 }
 
 // ============ HIỂN THỊ TRẠNG THÁI KHỞI ĐỘNG ============
-void showStatus(const char* line1, const char* line2 = "", uint16_t color = TFT_WHITE) {
+void showStatus(const char *line1, const char *line2 = "",
+                uint16_t color = TFT_WHITE) {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(color);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString(line1, tft.width()/2, tft.height()/2 - 10, 2);
+  tft.drawString(line1, tft.width() / 2, tft.height() / 2 - 10, 2);
   if (strlen(line2) > 0) {
     tft.setTextColor(TFT_DARKGREY);
-    tft.drawString(line2, tft.width()/2, tft.height()/2 + 15, 2);
+    tft.drawString(line2, tft.width() / 2, tft.height() / 2 + 15, 2);
   }
 }
 
@@ -50,7 +59,7 @@ void displayQRCode(String text) {
   // Tiêu đề
   tft.setTextColor(TFT_ORANGE);
   tft.setTextDatum(TC_DATUM);
-  tft.drawString("QUET MA DE CHECK-IN", tft.width()/2, 5, 2);
+  tft.drawString("QUET MA DE CHECK-IN", tft.width() / 2, 5, 2);
 
   // Tạo mã QR (version 3 = 29x29 modules)
   QRCode qrcode;
@@ -60,9 +69,10 @@ void displayQRCode(String text) {
   // Tính scale cho màn hình 240x240, chừa header 25px
   int availableHeight = tft.height() - 30;
   int scale = availableHeight / qrcode.size;
-  if (scale < 1) scale = 1;
+  if (scale < 1)
+    scale = 1;
 
-  int startX = (tft.width()  - qrcode.size * scale) / 2;
+  int startX = (tft.width() - qrcode.size * scale) / 2;
   int startY = 28 + (availableHeight - qrcode.size * scale) / 2;
 
   for (uint8_t y = 0; y < qrcode.size; y++) {
@@ -75,37 +85,48 @@ void displayQRCode(String text) {
   // Footer nhỏ
   tft.setTextColor(TFT_DARKGREY);
   tft.setTextDatum(BC_DATUM);
-  tft.drawString(text.c_str(), tft.width()/2, tft.height() - 2, 1);
+  tft.drawString(text.c_str(), tft.width() / 2, tft.height() - 2, 1);
 }
 
 // ============ ĐIỀU KHIỂN CỬA ============
-void openDoor() {
-  Serial.println("[DOOR] Opening...");
-  doorServo.write(90);
+void openDoor(int courtId) {
+  Serial.printf("[DOOR] Opening court %d...\n", courtId);
+  if (courtId == 1)
+    doorServo1.write(90);
+  else
+    doorServo2.write(90);
 
   tft.fillScreen(TFT_DARKGREEN);
   tft.setTextColor(TFT_WHITE);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("CUA DA MO!", tft.width()/2, tft.height()/2 - 10, 4);
+  tft.drawString(courtId == 1 ? "CUA 1 DA MO!" : "CUA 2 DA MO!",
+                 tft.width() / 2, tft.height() / 2 - 10, 4);
   tft.setTextColor(TFT_LIGHTGREY);
-  tft.drawString("Tu dong dong sau 5s", tft.width()/2, tft.height()/2 + 25, 2);
+  tft.drawString("Tu dong dong sau 5s", tft.width() / 2, tft.height() / 2 + 25,
+                 2);
 
   delay(5000);
 
-  Serial.println("[DOOR] Closing...");
-  doorServo.write(0);
+  Serial.printf("[DOOR] Closing court %d...\n", courtId);
+  if (courtId == 1)
+    doorServo1.write(0);
+  else
+    doorServo2.write(0);
 
   // Quay lại hiển thị QR
   displayQRCode(currentQRToken);
 }
 
-void closeDoor() {
-  Serial.println("[DOOR] Force closing...");
-  doorServo.write(0);
+void closeDoor(int courtId) {
+  Serial.printf("[DOOR] Force closing court %d...\n", courtId);
+  if (courtId == 1)
+    doorServo1.write(0);
+  else
+    doorServo2.write(0);
 }
 
 // ============ MQTT CALLBACK ============
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
+void mqttCallback(char *topic, byte *payload, unsigned int length) {
   String message = "";
   for (unsigned int i = 0; i < length; i++) {
     message += (char)payload[i];
@@ -114,13 +135,17 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String topicStr = String(topic);
   Serial.printf("[MQTT] %s -> %s\n", topic, message.c_str());
 
-  // Topic: court/1/open  (từ Checkin.tsx & Control.tsx)
+  // Topic: court/1/open hoặc court/2/open  (từ Checkin.tsx & Control.tsx)
   if (topicStr == "court/1/open") {
-    if (message == "OPEN") {
-      openDoor();
-    } else if (message == "CLOSE") {
-      closeDoor();
-    }
+    if (message == "OPEN")
+      openDoor(1);
+    else if (message == "CLOSE")
+      closeDoor(1);
+  } else if (topicStr == "court/2/open") {
+    if (message == "OPEN")
+      openDoor(2);
+    else if (message == "CLOSE")
+      closeDoor(2);
   }
 
   // Topic: court/1/light (từ Control.tsx)
@@ -148,6 +173,17 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       Serial.println("[RELAY] Fan OFF");
     }
   }
+
+  // Topic trạng thái sân từ Admin Web
+  if (topicStr == "court/1/status") {
+    isCourt1Booked = (message == "BOOKED");
+    Serial.printf("[STATUS] Court 1: %s\n",
+                  isCourt1Booked ? "BOOKED" : "EMPTY");
+  } else if (topicStr == "court/2/status") {
+    isCourt2Booked = (message == "BOOKED");
+    Serial.printf("[STATUS] Court 2: %s\n",
+                  isCourt2Booked ? "BOOKED" : "EMPTY");
+  }
 }
 
 // ============ KẾT NỐI LẠI MQTT ============
@@ -159,9 +195,11 @@ void reconnectMQTT() {
     if (mqtt.connect(clientId.c_str())) {
       Serial.println(" OK");
       mqtt.subscribe("court/1/open");
+      mqtt.subscribe("court/2/open");
       mqtt.subscribe("court/1/light");
       mqtt.subscribe("court/1/fan");
-      Serial.println("[MQTT] Subscribed to court/1/*");
+      mqtt.subscribe("court/+/status"); // Lắng nghe trạng thái của tất cả sân
+      Serial.println("[MQTT] Subscribed to topics");
     } else {
       Serial.printf(" FAIL (rc=%d), retry in 3s\n", mqtt.state());
       delay(3000);
@@ -180,9 +218,19 @@ void setup() {
   digitalWrite(RELAY_LIGHT_PIN, LOW);
   digitalWrite(RELAY_FAN_PIN, LOW);
 
+  // --- Sensors & Buzzers ---
+  pinMode(PIR_PIN_1, INPUT);
+  pinMode(BUZZER_PIN_1, OUTPUT);
+  pinMode(PIR_PIN_2, INPUT);
+  pinMode(BUZZER_PIN_2, OUTPUT);
+  digitalWrite(BUZZER_PIN_1, LOW);
+  digitalWrite(BUZZER_PIN_2, LOW);
+
   // --- Servo ---
-  doorServo.attach(SERVO_PIN);
-  doorServo.write(0); // Khóa ban đầu
+  doorServo1.attach(SERVO_PIN_1);
+  doorServo1.write(0); // Khóa ban đầu
+  doorServo2.attach(SERVO_PIN_2);
+  doorServo2.write(0); // Khóa ban đầu
 
   // --- TFT ---
   tft.init();
@@ -228,4 +276,18 @@ void loop() {
     reconnectMQTT();
   }
   mqtt.loop();
+
+  // Báo động Sân 1
+  if (digitalRead(PIR_PIN_1) == HIGH && !isCourt1Booked) {
+    digitalWrite(BUZZER_PIN_1, HIGH);
+  } else {
+    digitalWrite(BUZZER_PIN_1, LOW);
+  }
+
+  // Báo động Sân 2
+  if (digitalRead(PIR_PIN_2) == HIGH && !isCourt2Booked) {
+    digitalWrite(BUZZER_PIN_2, HIGH);
+  } else {
+    digitalWrite(BUZZER_PIN_2, LOW);
+  }
 }

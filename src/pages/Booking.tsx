@@ -23,6 +23,7 @@ export const Booking = () => {
   const [selectedHours, setSelectedHours] = useState<number[]>([]);
   const [showQR, setShowQR] = useState(false);
   const [qrCode, setQrCode] = useState<string | null>(null);
+  const [payosCheckoutUrl, setPayosCheckoutUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [customerName, setCustomerName] = useState(() => localStorage.getItem('savedCustomerName') || '');
   const [customerPhone, setCustomerPhone] = useState(() => localStorage.getItem('savedCustomerPhone') || '');
@@ -103,8 +104,8 @@ export const Booking = () => {
         console.error('Error fetching courts:', error);
       }
       setCourts([
-        { id: '1', name: 'Sân A - Trong nhà (VIP)', status: 'available' },
-        { id: '2', name: 'Sân B - Ngoài trời', status: 'available' },
+        { id: '1', name: 'Sân A - Trong nhà (VIP)', status: 'available', price_morning: 120000, price_afternoon: 100000, price_evening: 200000 },
+        { id: '2', name: 'Sân B - Ngoài trời', status: 'available', price_morning: 100000, price_afternoon: 80000, price_evening: 150000 },
       ]);
     }
   };
@@ -132,11 +133,17 @@ export const Booking = () => {
     });
   };
 
-  // Tính giá tuỳ theo giờ
+  // Tính giá tuỳ theo giờ và theo sân
   const getPricePerHour = (hour: number) => {
-    if (hour < 12) return 100000; // Sáng (6h-12h): 100k
-    if (hour < 17) return 80000;  // Trưa/Chiều (12h-17h): 80k (rẻ hơn do nắng)
-    return 150000;                // Tối (17h-23h): 150k (Giờ vàng)
+    const defaultMorn = 100000, defaultAft = 80000, defaultEve = 150000;
+    const court = courts.find(c => c.id === selectedCourt);
+    const pMorn = court?.price_morning || defaultMorn;
+    const pAft  = court?.price_afternoon || defaultAft;
+    const pEve  = court?.price_evening || defaultEve;
+
+    if (hour < 12) return pMorn; // Sáng (6h-12h)
+    if (hour < 17) return pAft;  // Trưa/Chiều (12h-17h)
+    return pEve;                 // Tối (17h-23h)
   };
 
   const calculateTotal = () => {
@@ -208,6 +215,31 @@ export const Booking = () => {
          phone: customerPhone,
          ranges: getSelectedRanges()
       });
+
+      // Gọi API Node.js/Express để tạo link thanh toán PayOS
+      try {
+        const payosRes = await fetch('/api/create-payment-link', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount: calculateTotal(),
+            description: `Thanh toan san`,
+            orderCode: Number(String(Date.now()).slice(-6)),
+            returnUrl: `${window.location.origin}/#/booking`,
+            cancelUrl: `${window.location.origin}/#/booking`
+          })
+        });
+        const payosData = await payosRes.json();
+        if (payosData && payosData.error === 0 && payosData.data?.checkoutUrl) {
+          setPayosCheckoutUrl(payosData.data.checkoutUrl);
+        } else {
+          setPayosCheckoutUrl(null); // Fallback to manual static QR
+        }
+      } catch (err) {
+        console.error('PayOS API error:', err);
+        setPayosCheckoutUrl(null); // Fallback
+      }
+
       setShowQR(true);
       // Giờ đã lưu vào receiptData, có thể xóa selectedHours thoải mái
       setSelectedHours([]);
@@ -255,10 +287,10 @@ export const Booking = () => {
           <div className="flex flex-col sm:flex-row justify-between gap-4">
             <div>
               <CardTitle>Bảng Giá Biến Động</CardTitle>
-              <CardDescription className="flex items-center gap-4 mt-2">
-                <span className="flex items-center gap-1.5 whitespace-nowrap"><div className="w-2 h-2 rounded-full bg-emerald-500"></div>Sáng: 100k/h</span>
-                <span className="flex items-center gap-1.5 whitespace-nowrap"><div className="w-2 h-2 rounded-full bg-amber-400"></div>Chiều: 80k/h</span>
-                <span className="flex items-center gap-1.5 whitespace-nowrap"><div className="w-2 h-2 rounded-full bg-slate-900"></div>Tối: 150k/h</span>
+              <CardDescription className="flex flex-wrap items-center gap-4 mt-2">
+                <span className="flex items-center gap-1.5 whitespace-nowrap"><div className="w-2 h-2 rounded-full bg-emerald-500"></div>Sáng: {(courts.find(c => c.id === selectedCourt)?.price_morning || 100000)/1000}k/h</span>
+                <span className="flex items-center gap-1.5 whitespace-nowrap"><div className="w-2 h-2 rounded-full bg-amber-400"></div>Chiều: {(courts.find(c => c.id === selectedCourt)?.price_afternoon || 80000)/1000}k/h</span>
+                <span className="flex items-center gap-1.5 whitespace-nowrap"><div className="w-2 h-2 rounded-full bg-slate-900"></div>Tối: {(courts.find(c => c.id === selectedCourt)?.price_evening || 150000)/1000}k/h</span>
               </CardDescription>
             </div>
             <div className="w-full sm:w-[250px]">
@@ -546,29 +578,46 @@ export const Booking = () => {
                <div className="absolute top-0 right-0 p-2 opacity-10">
                  <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.31-8.86c-1.77-.45-2.34-.94-2.34-1.67 0-.84.79-1.43 2.1-1.43 1.38 0 1.9.66 1.94 1.64h1.71c-.05-1.34-.87-2.57-2.49-2.97V5H10.9v1.69c-1.51.32-2.72 1.3-2.72 2.81 0 1.79 1.49 2.69 3.66 3.21 1.95.46 2.34 1.15 2.34 1.87 0 .53-.39 1.64-2.25 1.64-1.74 0-2.33-.97-2.39-1.8H7.81c.07 1.64 1.25 2.84 3.09 3.26V19h2.32v-1.7c1.61-.31 2.88-1.38 2.88-3.03 0-2.3-1.83-3.13-3.79-3.63z" /></svg>
                </div>
-               <h4 className="text-orange-400 font-semibold mb-3 z-10">1. Quét Mã Thanh Toán</h4>
-               <div className="bg-white p-2 rounded-xl border-2 border-slate-600 z-10 flex flex-col items-center">
-                 {/* Fixed space in filename based on actual public dir contents */}
-                 <img src="/qrthanhtoan .jpg" alt="QR Thanh Toán" className="w-[180px] h-auto rounded-lg" />
-                 <a 
-                   href="/qrthanhtoan .jpg" 
-                   download="QR_ThanhToan_CourtKings.jpg" 
-                   className="mt-2 text-xs flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 px-3 py-1.5 rounded-md font-medium transition-colors w-full"
-                 >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-                    Tải ảnh xuống
-                 </a>
-               </div>
-               <div className="mt-4 w-full text-center z-10 bg-slate-900/50 p-3 rounded-xl border border-slate-700/50">
-                 <p className="text-sm text-slate-300 flex justify-between items-center mb-2">Số tiền: <span className="font-bold text-orange-400 text-xl ml-1">{receiptData?.total.toLocaleString('vi-VN')}đ</span></p>
-                 <div className="w-full h-px bg-slate-700/50 mb-2"></div>
-                 <p className="text-xs text-slate-400 flex flex-col items-start gap-1">
-                    <span className="mb-0.5">Vui lòng nhập chính xác Nội dung DK:</span>
-                    <span className="text-white font-mono bg-slate-800 px-3 py-1.5 rounded w-full text-left tracking-wider">
-                      {receiptData?.name} {receiptData?.phone} CHON {receiptData?.ranges.length} CA
-                    </span>
-                 </p>
-               </div>
+               
+               {payosCheckoutUrl ? (
+                  <>
+                     <h4 className="text-orange-400 font-semibold mb-3 z-10">1. Thanh Toán Qua PayOS</h4>
+                     <p className="text-sm text-slate-300 text-center mb-4 z-10">
+                        Đơn đặt sân của bạn đã được tạo cổng thanh toán tự động qua PayOS.
+                     </p>
+                     <Button 
+                       onClick={() => window.location.href = payosCheckoutUrl} 
+                       className="bg-orange-500 hover:bg-orange-600 text-white w-full rounded-xl z-10 shadow-lg text-md py-6 mb-4 font-bold"
+                     >
+                       Thanh Toán Ngay ({receiptData?.total.toLocaleString('vi-VN')}đ)
+                     </Button>
+                  </>
+               ) : (
+                  <>
+                     <h4 className="text-orange-400 font-semibold mb-3 z-10">1. Quét Mã Thanh Toán (Thủ Công)</h4>
+                     <div className="bg-white p-2 rounded-xl border-2 border-slate-600 z-10 flex flex-col items-center">
+                       <img src="/qrthanhtoan .jpg" alt="QR Thanh Toán" className="w-[180px] h-auto rounded-lg" />
+                       <a 
+                         href="/qrthanhtoan .jpg" 
+                         download="QR_ThanhToan_CourtKings.jpg" 
+                         className="mt-2 text-xs flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 px-3 py-1.5 rounded-md font-medium transition-colors w-full"
+                       >
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                          Tải ảnh xuống
+                       </a>
+                     </div>
+                     <div className="mt-4 w-full text-center z-10 bg-slate-900/50 p-3 rounded-xl border border-slate-700/50">
+                       <p className="text-sm text-slate-300 flex justify-between items-center mb-2">Số tiền: <span className="font-bold text-orange-400 text-xl ml-1">{receiptData?.total.toLocaleString('vi-VN')}đ</span></p>
+                       <div className="w-full h-px bg-slate-700/50 mb-2"></div>
+                       <p className="text-xs text-slate-400 flex flex-col items-start gap-1">
+                          <span className="mb-0.5">Vui lòng nhập chính xác Nội dung DK:</span>
+                          <span className="text-white font-mono bg-slate-800 px-3 py-1.5 rounded w-full text-left tracking-wider">
+                            {receiptData?.name} {receiptData?.phone} CHON {receiptData?.ranges.length} CA
+                          </span>
+                       </p>
+                     </div>
+                  </>
+               )}
             </div>
 
             {/* Check-in Instructions Section */}

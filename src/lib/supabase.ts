@@ -19,6 +19,9 @@ export interface Court {
   id: string;
   name: string;
   status: 'available' | 'in_use' | 'maintenance';
+  price_morning?: number;
+  price_afternoon?: number;
+  price_evening?: number;
 }
 
 export interface Booking {

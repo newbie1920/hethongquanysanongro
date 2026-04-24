@@ -40,20 +40,24 @@ export const Checkin = () => {
         // Lấy giờ hiện tại để đối chiếu
         const currentHour = new Date().getHours();
         
-        const canPlayNow = myPaidBookings.some(booking => 
+        // Lấy lịch đặt của khung giờ hiện tại
+        const currentBooking = myPaidBookings.find(booking => 
           booking.ranges.some(r => currentHour >= r.start && currentHour < r.end)
         );
 
-        if (!canPlayNow) {
+        if (!currentBooking) {
           toast.error(`Bạn có lịch đặt nhưng KHÔNG phải khung giờ hiện tại (${currentHour}h)!`);
           setLoading(false);
           return;
         }
 
         const { publishMessage } = await import('../lib/mqtt');
-        publishMessage('court/1/open', 'OPEN');
-        // also turn on the light automatically
-        publishMessage('court/1/light', 'ON');
+        
+        // Gửi lệnh mở cửa tương ứng với sân đã đặt
+        publishMessage(`court/${currentBooking.court_id}/open`, 'OPEN');
+        
+        // Tắt đèn & quạt tự động mở theo sân (nếu phần cứng hỗ trợ)
+        publishMessage(`court/${currentBooking.court_id}/light`, 'ON');
       } catch (e) {
         console.warn('Network / MQTT / Database error', e);
         toast.error('Lỗi khi đối chiếu thông tin (Cần mạng để hoạt động)');
